@@ -19,5 +19,6 @@ static void TIM2_Init(void);
 long map(long x, long in_min, long in_max, long out_min, long out_max);
 void nRF24();
 void arduinoCom();
+void nRF_Error_Handler(uint8_t value);
 
 #endif
