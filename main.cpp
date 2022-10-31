@@ -53,27 +53,33 @@
 #include "main.h"
 #include "nRF24L01P.h"
 
+#define ARRAY_LEN(x)            (sizeof(x) / sizeof((x)[0]))
+
 UART_HandleTypeDef huart2; //Serial Monitor
-UART_HandleTypeDef huart3; //Arduino Coms
 SPI_HandleTypeDef hspi3; //Tranceivers
 
 Thread nRF24Thread;
 
-static uint8_t TRANSFER_SIZE = 32;
-char uartData[32];
+uint8_t uartDataBuf[32] = {0};
+uint8_t uartData[32] = {0};
+size_t old_posRx;
+size_t posRx;
+bool newData = false;
 
 //nRF Tx and Rx Variables
-char nRF_RxData[32]; //"#000000134111154132000000"
+char nRF_RxData[32] = {0}; //"#99000000134111154132000000999#"
 int nRF_RxDataCnt = 0;
-char nRF_TxData[32];
+char nRF_TxData[32] = {0};
+char nRF_TxDataBuf[32] = {0};
 bool nRF_NewData = false;
 bool nRF_Initialized = false;
 
 int main()
 {
+    NVIC_SetPriorityGrouping(NVIC_PRIORITYGROUP_4);
+
     HAL_Init();             
     SystemClock_Config();   
-    Init_OnBoard_LEDs();
     GPIO_Init();
     USART2_UART_Init();
     USART3_UART_Init();
@@ -84,10 +90,34 @@ int main()
     while(1)
     {
         HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
-        HAL_Delay(100);
-        HAL_UART_Receive(&huart3, (uint8_t *)uartData, 32, 100);
-        printf("UART Data: %s\n", uartData);
+
+        HAL_Delay(250);
+        printf("nRF Transmit Data: %s | nRF Receive Data: %s \n", nRF_TxData, nRF_RxData);
     }
+}
+
+//Check sum stuff: 
+//Function 1: Checksum calc = Parse end 3 digits - 1 -> Add rest of data together -> return added value (checksum)
+//Function 2: Compare checksum = Parse end 3 digits - 1 -> call checksumcalc and save value -> if == memcpy to nRF_RxData + counter at start
+//if not dont memcpy print bad packet or something
+
+/*char checkSum(char data[32])
+{
+    int checkSumCalc;
+
+    for(int i = 1; i < 29; i++)
+    {
+        checkSumCalc += data[i];
+    }
+
+    memcpy(data[29], checkSumCalc, 3);
+    return data;
+}
+*/
+
+void USART_Process_Data() 
+{
+    memcpy(nRF_TxData, uartDataBuf, 32);
 }
 
 void nRF24()
@@ -137,6 +167,8 @@ void nRF24()
         }
         while (nRF_Initialized)
         {
+            thread_sleep_for(10); //Transmit every 100ms
+
             //Receive data if there is data to be received
             if (nRF.readable())
             {
@@ -145,12 +177,11 @@ void nRF24()
             }
             if (nRF_NewData == true)
             {
-                printf("nRF Received Data: %s\n", nRF_RxData);
+                //printf("nRF Received Data: %s\n", nRF_RxData);
                 nRF_NewData = false;
             }
-
             memcpy(nRF_TxData, uartData, 32);
-            nRF.write(NRF24L01P_PIPE_P0, nRF_TxData, sizeof(nRF_TxData));
+            nRF.write(NRF24L01P_PIPE_P1, nRF_TxData, sizeof(nRF_TxData));
             
         }
     }
@@ -158,41 +189,40 @@ void nRF24()
 
 void SystemClock_Config(void)
 {
-   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-  /** Configure the main internal regulator output voltage
-  */
-  __HAL_RCC_PWR_CLK_ENABLE();
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = 8;
-  RCC_OscInitStruct.PLL.PLLN = 336;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 7;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
+    // Configure the main internal regulator output voltage
+    
+    __HAL_RCC_PWR_CLK_ENABLE();
+    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+    // Initializes the RCC Oscillators according to the specified parameters
+    // in the RCC_OscInitTypeDef structure.
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+    RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+    RCC_OscInitStruct.PLL.PLLM = 8;
+    RCC_OscInitStruct.PLL.PLLN = 336;
+    RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+    RCC_OscInitStruct.PLL.PLLQ = 7;
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+    {
     Error_Handler();
-  }
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV4;
+    }
+    // Initializes the CPU, AHB and APB buses clocks
+    
+    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                                |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV4;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
-  {
+    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
+    {
     Error_Handler();
-  }
+    }
 }
 
 static void SPI3_Init(void)
@@ -235,6 +265,7 @@ static void USART2_UART_Init(void)
 static void GPIO_Init(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
+    LL_GPIO_InitTypeDef LL_GPIO_InitStruct = {0};
 
     //GPIO Ports Clock Enable
     __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -253,13 +284,15 @@ static void GPIO_Init(void)
     HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
     //Configure GPIO pins for UART3
-    __HAL_RCC_USART3_CLK_ENABLE();
-    GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    GPIO_InitStruct.Alternate = GPIO_AF7_USART3;
-    HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+    LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_USART3);
+    LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_DMA1);
+    LL_GPIO_InitStruct.Pin = LL_GPIO_PIN_8 | LL_GPIO_PIN_9;
+    LL_GPIO_InitStruct.Mode = LL_GPIO_MODE_ALTERNATE;
+    LL_GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_VERY_HIGH;
+    LL_GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+    LL_GPIO_InitStruct.Pull = LL_GPIO_PULL_UP;
+    LL_GPIO_InitStruct.Alternate = LL_GPIO_AF_7;
+    LL_GPIO_Init(GPIOD, &LL_GPIO_InitStruct);
 }
 
 void Error_Handler(void)
@@ -271,31 +304,55 @@ void Error_Handler(void)
     }
 }
 
-void Init_OnBoard_LEDs(void)
-{
-    //Initialize main LEDs 
-	__HAL_RCC_GPIOD_CLK_ENABLE();
-	GPIO_InitTypeDef BoardLEDs;
-	BoardLEDs.Mode = GPIO_MODE_OUTPUT_PP;
-	BoardLEDs.Pin = GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
-	HAL_GPIO_Init(GPIOD, &BoardLEDs);
-}
-
 static void USART3_UART_Init(void)
 {
-    huart3.Instance = USART3;
-    huart3.Init.BaudRate = 9600;
-    huart3.Init.WordLength = UART_WORDLENGTH_8B;
-    huart3.Init.StopBits = UART_STOPBITS_1;
-    huart3.Init.Parity = UART_PARITY_NONE;
-    huart3.Init.Mode = UART_MODE_TX_RX;
-    huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-    huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+    //Initialize USART3 for DMA Rx and Tx
+    LL_USART_InitTypeDef USART_InitStruct = {0};
+    
+    //Peripheral clock enable
+    LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_USART3);
+    LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOD);
+    LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_DMA1);
 
-    if (HAL_UART_Init(&huart3) != HAL_OK)
-    {
-        Error_Handler();
-    }
+    //USART3 DMA Init for Rx
+    LL_DMA_SetChannelSelection(DMA1, LL_DMA_STREAM_1, LL_DMA_CHANNEL_4);
+    LL_DMA_SetDataTransferDirection(DMA1, LL_DMA_STREAM_1, LL_DMA_DIRECTION_PERIPH_TO_MEMORY);
+    LL_DMA_SetStreamPriorityLevel(DMA1, LL_DMA_STREAM_1, LL_DMA_PRIORITY_LOW);
+    LL_DMA_SetMode(DMA1, LL_DMA_STREAM_1, LL_DMA_MODE_CIRCULAR);
+    LL_DMA_SetPeriphIncMode(DMA1, LL_DMA_STREAM_1, LL_DMA_PERIPH_NOINCREMENT);
+    LL_DMA_SetMemoryIncMode(DMA1, LL_DMA_STREAM_1, LL_DMA_MEMORY_INCREMENT);
+    LL_DMA_SetPeriphSize(DMA1, LL_DMA_STREAM_1, LL_DMA_PDATAALIGN_BYTE);
+    LL_DMA_SetMemorySize(DMA1, LL_DMA_STREAM_1, LL_DMA_MDATAALIGN_BYTE);
+    LL_DMA_DisableFifoMode(DMA1, LL_DMA_STREAM_1);
+    LL_DMA_SetPeriphAddress(DMA1, LL_DMA_STREAM_1, LL_USART_DMA_GetRegAddr(USART3));
+    LL_DMA_SetMemoryAddress(DMA1, LL_DMA_STREAM_1, (uint32_t)uartData);
+    LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_1, ARRAY_LEN(uartData));
+
+    //DMA interrupt init for Rx
+    LL_DMA_EnableIT_TC(DMA1, LL_DMA_STREAM_1);
+    NVIC_SetPriority(DMA1_Stream1_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 0, 0));
+    NVIC_EnableIRQ(DMA1_Stream1_IRQn);
+
+    //USART Config (Tx done in DMA transmit function)
+    USART_InitStruct.BaudRate = 9600;
+    USART_InitStruct.DataWidth = LL_USART_DATAWIDTH_8B;
+    USART_InitStruct.StopBits = LL_USART_STOPBITS_1;
+    USART_InitStruct.Parity = LL_USART_PARITY_NONE;
+    USART_InitStruct.TransferDirection = LL_USART_DIRECTION_TX_RX;
+    USART_InitStruct.HardwareFlowControl = LL_USART_HWCONTROL_NONE;
+    USART_InitStruct.OverSampling = LL_USART_OVERSAMPLING_16;
+    LL_USART_Init(USART3, &USART_InitStruct);
+    LL_USART_ConfigAsyncMode(USART3);
+    LL_USART_EnableDMAReq_RX(USART3);
+    LL_USART_EnableIT_IDLE(USART3);
+
+    //USART interrupt init 
+    NVIC_SetPriority(USART3_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 0, 0));
+    NVIC_EnableIRQ(USART3_IRQn);
+
+    //Enable USART3 and DMA Rx Stream 
+    LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_1);
+    LL_USART_Enable(USART3);
 }
 
 void nRF_Error_Handler(uint8_t value)
@@ -330,5 +387,24 @@ void nRF_Error_Handler(uint8_t value)
         //CRC Size Error 
             printf("nRF24L01P: Unknown CRC Width value.\n");
             break;
+    }
+}
+
+void USART3_IRQHandler(void) 
+{
+    //Check idle line interrupt for USART
+    if (LL_USART_IsEnabledIT_IDLE(USART3) && LL_USART_IsActiveFlag_IDLE(USART3)) {
+        LL_USART_ClearFlag_IDLE(USART3);        //Clear IDLE line Flag
+        USART_Process_Data();                       //Filter received data
+    }
+}
+
+void DMA1_Stream1_IRQHandler(void) 
+{
+    // Check transfer-complete interrupt for Rx
+    if (LL_DMA_IsEnabledIT_TC(DMA1, LL_DMA_STREAM_1) && LL_DMA_IsActiveFlag_TC1(DMA1)) 
+    {
+        LL_DMA_ClearFlag_TC1(DMA1);             //Clear transfer complete flag 
+        USART_Process_Data();                       //Filter received data
     }
 }
