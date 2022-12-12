@@ -17,7 +17,7 @@ extern "C" {
 #include "stm32f4xx_ll_usart.h"
 #include "stm32f4xx.h"
 #include "stm32f4xx_ll_gpio.h"
-
+#include "stm32f4xx_ll_spi.h"
 
 void checkSumCompare(char data[32]);
 int checkSumCalc(char data[32]);
@@ -36,6 +36,7 @@ void nRF_Error_Handler(uint8_t value);
 void DMA1_Stream1_IRQHandler(void);
 void USART3_IRQHandler(void);
 void USART_Process_Data();
+void dmaFilter();
 
 #ifndef NVIC_PRIORITYGROUP_0
 #define NVIC_PRIORITYGROUP_0         ((uint32_t)0x00000007) /*!< 0 bit  for pre-emption priority,
